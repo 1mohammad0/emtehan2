@@ -18,21 +18,15 @@ app.listen(process.env.PORT || 3000);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// ================= CACHE (حل 502) =================
+// ================= CACHE =================
 let cachedProducts = [];
 let lastFetch = 0;
 
-// ================= ADMIN =================
-function isAdmin(userId) {
-  const admins = (process.env.ADMIN_IDS || "")
-    .split(",")
-    .map(x => x.trim())
-    .filter(Boolean);
+// ================= USER STATE =================
+const userCache = new Map();   // لیست نتایج
+const userState = new Map();   // حالت AI
 
-  return admins.includes(String(userId));
-}
-
-// ================= MENU =================
+// ================= MAIN MENU =================
 function mainMenu(chatId) {
   bot.sendMessage(chatId, "🏠 منوی اصلی", {
     reply_markup: {
@@ -46,12 +40,11 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= GET PRODUCTS (CACHE FIX) =================
+// ================= PRODUCTS (CACHE FIX) =================
 async function getProducts() {
   try {
     const now = Date.now();
 
-    // استفاده از کش (خیلی مهم برای جلوگیری از 502)
     if (cachedProducts.length && now - lastFetch < 30000) {
       return cachedProducts;
     }
@@ -72,45 +65,29 @@ async function getProducts() {
     }));
 
     lastFetch = now;
-
     return cachedProducts;
 
   } catch (e) {
     console.error("Sheet error:", e.message);
-    return cachedProducts; // fallback
+    return cachedProducts;
   }
 }
 
-// ================= FILTER (AI SCOPE CONTROL) =================
-function isRelatedToShop(text) {
-  const keywords = [
-    "پکیج", "شیر", "لوله", "رادیاتور",
-    "پمپ", "تاسیسات", "شوفاژ",
-    "قیمت", "خرید", "مدل"
-  ];
-
-  const t = text.toLowerCase();
-  return keywords.some(k => t.includes(k));
-}
-
 // ================= GEMINI =================
-async function askGemini(text, products) {
-  const context = products
-    .slice(0, 20)
-    .map(p => `${p.name} | ${p.price} | ${p.specs}`)
-    .join("\n");
-
+async function askGemini(product, question) {
   const prompt = `
 تو یک فروشنده حرفه‌ای تاسیسات هستی.
 
-اگر سوال ربط ندارد فقط بنویس:
-"بی‌مورد"
+محصول:
+نام: ${product?.name}
+قیمت: ${product?.price}
+مشخصات: ${product?.specs}
 
-محصولات:
-${context}
+سوال کاربر:
+${question}
 
-سوال:
-${text}
+فقط در حوزه همین محصول جواب بده.
+اگر سوال نامرتبط بود بگو: "بی‌مورد"
 `;
 
   const result = await model.generateContent(prompt);
@@ -127,7 +104,7 @@ bot.on("message", async msg => {
 
   if (!text || text.startsWith("/")) return;
 
-  // -------- MENU --------
+  // ---------- MENU ----------
   if (text === "🔍 جستجوی محصول") {
     return bot.sendMessage(chatId, "✍️ نام محصول یا دسته را بنویس:");
   }
@@ -144,29 +121,31 @@ bot.on("message", async msg => {
     return bot.sendLocation(chatId, 38.2598767, 48.3091167);
   }
 
-  // ================= SAFE LOAD =================
-  const products = await getProducts();
+  // ---------- AI STATE ----------
+  const state = userState.get(chatId);
 
-  if (!products.length) {
-    return bot.sendMessage(chatId, "❌ مشکل در دریافت محصولات");
-  }
+  if (state?.mode === "ai") {
+    userState.delete(chatId);
 
-  // ================= AI MODE (ONLY SHOP) =================
-  if (isRelatedToShop(text)) {
+    const products = await getProducts();
+    const product = products.find(p => p.name === state.product);
+
     try {
-      const ai = await askGemini(text, products);
+      const answer = await askGemini(product, text);
 
-      if (ai.toLowerCase().includes("بی‌مورد")) {
+      if (answer.toLowerCase().includes("بی‌مورد")) {
         return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
       }
 
-      return bot.sendMessage(chatId, ai);
+      return bot.sendMessage(chatId, answer);
     } catch (e) {
-      console.error("Gemini error:", e.message);
+      return bot.sendMessage(chatId, "❌ خطا در AI");
     }
   }
 
-  // ================= SEARCH MODE =================
+  // ---------- SEARCH ----------
+  const products = await getProducts();
+
   const fuse = new Fuse(products, {
     keys: ["name", "specs"],
     threshold: 0.5
@@ -181,6 +160,8 @@ bot.on("message", async msg => {
   if (results.length === 1) {
     return sendProduct(chatId, results[0]);
   }
+
+  userCache.set(chatId, results);
 
   return bot.sendMessage(chatId,
 `🔍 ${results.length} محصول پیدا شد:`,
@@ -207,8 +188,9 @@ ${product.specs || "-"}`,
   {
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🔙 بازگشت", callback_data: "back" }],
-        [{ text: "🌐 جستجو در گوگل", callback_data: `web_${product.name}` }]
+        [{ text: "🔙 بازگشت به لیست", callback_data: "back_list" }],
+        [{ text: "🌐 جستجو در اینترنت", callback_data: `web_${product.name}` }],
+        [{ text: "🤖 پرسش از هوش مصنوعی", callback_data: `ai_${product.name}` }]
       ]
     }
   });
@@ -218,8 +200,18 @@ ${product.specs || "-"}`,
 bot.on("callback_query", async q => {
   const chatId = q.message.chat.id;
 
-  if (q.data === "back") {
-    return mainMenu(chatId);
+  if (q.data === "back_list") {
+    const list = userCache.get(chatId);
+    if (!list) return mainMenu(chatId);
+
+    return bot.sendMessage(chatId, "🔙 لیست محصولات:", {
+      reply_markup: {
+        inline_keyboard: list.map(p => ([{
+          text: p.name,
+          callback_data: `open_${p.name}`
+        }]))
+      }
+    });
   }
 
   if (q.data.startsWith("open_")) {
@@ -235,5 +227,19 @@ bot.on("callback_query", async q => {
     const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
     return bot.sendMessage(chatId, `🌐 جستجو:\n\n${url}`);
+  }
+
+  if (q.data.startsWith("ai_")) {
+    const productName = q.data.replace("ai_", "");
+
+    userState.set(chatId, {
+      mode: "ai",
+      product: productName
+    });
+
+    return bot.sendMessage(chatId,
+`🤖 سوال خود را درباره این محصول بنویس:
+
+🛒 ${productName}`);
   }
 });

@@ -35,7 +35,7 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= PRODUCTS =================
+// ================= GET PRODUCTS =================
 async function getProducts() {
   try {
     const now = Date.now();
@@ -68,7 +68,7 @@ async function getProducts() {
   }
 }
 
-// ================= SMART SEARCH ENGINE =================
+// ================= SMART SEARCH =================
 function smartScore(text, product) {
   const t = text.toLowerCase().trim();
   const name = (product.name || "").toLowerCase();
@@ -89,6 +89,52 @@ function smartScore(text, product) {
   }
 
   return score;
+}
+
+// ================= OPENROUTER AI =================
+async function askAI(product, question) {
+  try {
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
+تو یک فروشنده حرفه‌ای تاسیسات هستی.
+فقط درباره محصولات جواب بده.
+اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
+`
+          },
+          {
+            role: "user",
+            content: `
+محصول:
+${product?.name || ""}
+${product?.price || ""}
+${product?.specs || ""}
+
+سوال:
+${question}
+`
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    return res.data.choices?.[0]?.message?.content || "ERROR";
+
+  } catch (err) {
+    console.error("AI ERROR:", err.response?.data || err.message);
+    return "ERROR";
+  }
 }
 
 // ================= START =================
@@ -116,6 +162,28 @@ bot.on("message", async msg => {
 
   if (text === "📍 آدرس فروشگاه") {
     return bot.sendLocation(chatId, 38.2598767, 48.3091167);
+  }
+
+  // ---------- AI MODE ----------
+  const state = userState.get(chatId);
+
+  if (state?.mode === "ai") {
+    const products = await getProducts();
+    const product = products.find(p => p.name === state.product);
+
+    userState.delete(chatId);
+
+    const answer = await askAI(product, text);
+
+    if (!answer || answer === "ERROR") {
+      return bot.sendMessage(chatId, "❌ خطا در هوش مصنوعی");
+    }
+
+    if (answer.includes("بی‌مورد")) {
+      return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
+    }
+
+    return bot.sendMessage(chatId, answer);
   }
 
   // ---------- SEARCH ----------

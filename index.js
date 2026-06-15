@@ -17,7 +17,7 @@ app.listen(process.env.PORT || 3000);
 let cachedProducts = [];
 let lastFetch = 0;
 
-// ================= USER STATE =================
+// ================= STATE =================
 const userCache = new Map();
 const userState = new Map();
 
@@ -35,7 +35,7 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= GET PRODUCTS =================
+// ================= PRODUCTS =================
 async function getProducts() {
   try {
     const now = Date.now();
@@ -68,50 +68,27 @@ async function getProducts() {
   }
 }
 
-// ================= OPENROUTER AI =================
-async function askAI(product, question) {
-  try {
-    const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: "openai/gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `
-تو یک فروشنده حرفه‌ای تاسیسات هستی.
-فقط درباره محصولات جواب بده.
-اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
-`
-          },
-          {
-            role: "user",
-            content: `
-محصول:
-${product?.name}
-${product?.price}
-${product?.specs}
+// ================= SMART SEARCH ENGINE =================
+function smartScore(text, product) {
+  const t = text.toLowerCase().trim();
+  const name = (product.name || "").toLowerCase();
+  const specs = (product.specs || "").toLowerCase();
 
-سوال:
-${question}
-`
-          }
-        ]
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+  let score = 0;
 
-    return response.data.choices[0].message.content;
+  if (name === t) score += 100;
+  if (name.includes(t)) score += 60;
+  if (t.includes(name)) score += 40;
 
-  } catch (err) {
-    console.error("OpenRouter error:", err.response?.data || err.message);
-    return "ERROR_AI";
+  const words = t.split(" ");
+  for (const w of words) {
+    if (w.length < 2) continue;
+
+    if (name.includes(w)) score += 20;
+    if (specs.includes(w)) score += 5;
   }
+
+  return score;
 }
 
 // ================= START =================
@@ -141,37 +118,30 @@ bot.on("message", async msg => {
     return bot.sendLocation(chatId, 38.2598767, 48.3091167);
   }
 
-  // ---------- AI MODE ----------
-  const state = userState.get(chatId);
-
-  if (state?.mode === "ai") {
-    userState.delete(chatId);
-
-    const products = await getProducts();
-    const product = products.find(p => p.name === state.product);
-
-    const answer = await askAI(product, text);
-
-    if (answer === "ERROR_AI") {
-      return bot.sendMessage(chatId, "❌ خطا در هوش مصنوعی");
-    }
-
-    if (answer.includes("بی‌مورد")) {
-      return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
-    }
-
-    return bot.sendMessage(chatId, answer);
-  }
-
   // ---------- SEARCH ----------
   const products = await getProducts();
 
   const fuse = new Fuse(products, {
-    keys: ["name", "specs"],
-    threshold: 0.5
+    keys: ["name"],
+    threshold: 0.3
   });
 
-  const results = fuse.search(text).map(r => r.item);
+  let candidates = fuse.search(text).map(r => r.item);
+
+  if (!candidates.length) {
+    candidates = products;
+  }
+
+  let results = candidates
+    .map(p => ({
+      item: p,
+      score: smartScore(text, p)
+    }))
+    .filter(r => r.score > 20)
+    .sort((a, b) => b.score - a.score)
+    .map(r => r.item);
+
+  results = [...new Map(results.map(p => [p.name, p])).values()];
 
   if (!results.length) {
     return bot.sendMessage(chatId, "❌ چیزی پیدا نشد");
@@ -185,14 +155,14 @@ bot.on("message", async msg => {
 
   return bot.sendMessage(chatId,
 `🔍 ${results.length} محصول پیدا شد:`,
-  {
-    reply_markup: {
-      inline_keyboard: results.map(p => ([{
-        text: p.name,
-        callback_data: `open_${p.name}`
-      }]))
-    }
-  });
+{
+  reply_markup: {
+    inline_keyboard: results.map(p => ([{
+      text: p.name,
+      callback_data: `open_${p.name}`
+    }]))
+  }
+});
 });
 
 // ================= PRODUCT =================
@@ -205,15 +175,15 @@ function sendProduct(chatId, product) {
 
 📝 مشخصات:
 ${product.specs || "-"}`,
-  {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🔙 بازگشت به لیست", callback_data: "back_list" }],
-        [{ text: "🌐 جستجو در اینترنت", callback_data: `web_${product.name}` }],
-        [{ text: "🤖 پرسش از هوش مصنوعی", callback_data: `ai_${product.name}` }]
-      ]
-    }
-  });
+{
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: "🔙 بازگشت به لیست", callback_data: "back_list" }],
+      [{ text: "🌐 جستجو در اینترنت", callback_data: `web_${product.name}` }],
+      [{ text: "🤖 پرسش از هوش مصنوعی", callback_data: `ai_${product.name}` }]
+    ]
+  }
+});
 }
 
 // ================= CALLBACK =================

@@ -35,7 +35,7 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= GET PRODUCTS =================
+// ================= PRODUCTS =================
 async function getProducts() {
   try {
     const now = Date.now();
@@ -91,6 +91,32 @@ function smartScore(text, product) {
   return score;
 }
 
+// ================= 🔥 NEW: SMART IRRELEVANT DETECTOR =================
+function isIrrelevant(question) {
+  const q = question.toLowerCase();
+
+  // کلمات کاملاً بی‌ربط به فروشگاه
+  const blockedWords = [
+    "سیاسی", "politics", "دولت", "کشور",
+    "فیلم", "سریال", "music", "آهنگ",
+    "بازی", "game",
+    "ریاضی", "حل کن", "معادله",
+    "اخبار", "خبر",
+    "فال", "طالع", "فالگیر"
+  ];
+
+  let score = 0;
+
+  for (const w of blockedWords) {
+    if (q.includes(w)) score += 2;
+  }
+
+  // اگر سوال خیلی کوتاه یا بی‌معنی باشد
+  if (q.length < 3) score += 2;
+
+  return score >= 3;
+}
+
 // ================= OPENROUTER AI =================
 async function askAI(product, question) {
   try {
@@ -103,8 +129,10 @@ async function askAI(product, question) {
             role: "system",
             content: `
 تو یک فروشنده حرفه‌ای تاسیسات هستی.
-فقط درباره محصولات جواب بده.
-اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
+
+قوانین:
+- فقط درباره محصولات جواب بده
+- اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
 `
           },
           {
@@ -168,6 +196,13 @@ bot.on("message", async msg => {
   const state = userState.get(chatId);
 
   if (state?.mode === "ai") {
+
+    // 🔥 قبل از ارسال به AI چک می‌کنیم
+    if (isIrrelevant(text)) {
+      userState.delete(chatId);
+      return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
+    }
+
     const products = await getProducts();
     const product = products.find(p => p.name === state.product);
 

@@ -3,7 +3,6 @@ import express from "express";
 import axios from "axios";
 import Fuse from "fuse.js";
 import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 dotenv.config();
 
@@ -14,17 +13,13 @@ const app = express();
 app.get("/", (req, res) => res.send("Bot is running"));
 app.listen(process.env.PORT || 3000);
 
-// ================= GEMINI =================
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
 // ================= CACHE =================
 let cachedProducts = [];
 let lastFetch = 0;
 
 // ================= USER STATE =================
-const userCache = new Map();   // لیست نتایج
-const userState = new Map();   // حالت AI
+const userCache = new Map();
+const userState = new Map();
 
 // ================= MAIN MENU =================
 function mainMenu(chatId) {
@@ -40,7 +35,7 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= PRODUCTS (CACHE FIX) =================
+// ================= GET PRODUCTS =================
 async function getProducts() {
   try {
     const now = Date.now();
@@ -73,25 +68,50 @@ async function getProducts() {
   }
 }
 
-// ================= GEMINI =================
-async function askGemini(product, question) {
-  const prompt = `
+// ================= OPENROUTER AI =================
+async function askAI(product, question) {
+  try {
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "openai/gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
 تو یک فروشنده حرفه‌ای تاسیسات هستی.
-
+فقط درباره محصولات جواب بده.
+اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
+`
+          },
+          {
+            role: "user",
+            content: `
 محصول:
-نام: ${product?.name}
-قیمت: ${product?.price}
-مشخصات: ${product?.specs}
+${product?.name}
+${product?.price}
+${product?.specs}
 
-سوال کاربر:
+سوال:
 ${question}
+`
+          }
+        ]
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-فقط در حوزه همین محصول جواب بده.
-اگر سوال نامرتبط بود بگو: "بی‌مورد"
-`;
+    return response.data.choices[0].message.content;
 
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  } catch (err) {
+    console.error("OpenRouter error:", err.response?.data || err.message);
+    return "ERROR_AI";
+  }
 }
 
 // ================= START =================
@@ -106,7 +126,7 @@ bot.on("message", async msg => {
 
   // ---------- MENU ----------
   if (text === "🔍 جستجوی محصول") {
-    return bot.sendMessage(chatId, "✍️ نام محصول یا دسته را بنویس:");
+    return bot.sendMessage(chatId, "✍️ نام یا دسته محصول را بنویس:");
   }
 
   if (text === "📞 ارتباط با ما") {
@@ -121,7 +141,7 @@ bot.on("message", async msg => {
     return bot.sendLocation(chatId, 38.2598767, 48.3091167);
   }
 
-  // ---------- AI STATE ----------
+  // ---------- AI MODE ----------
   const state = userState.get(chatId);
 
   if (state?.mode === "ai") {
@@ -130,17 +150,17 @@ bot.on("message", async msg => {
     const products = await getProducts();
     const product = products.find(p => p.name === state.product);
 
-    try {
-      const answer = await askGemini(product, text);
+    const answer = await askAI(product, text);
 
-      if (answer.toLowerCase().includes("بی‌مورد")) {
-        return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
-      }
-
-      return bot.sendMessage(chatId, answer);
-    } catch (e) {
-      return bot.sendMessage(chatId, "❌ خطا در AI");
+    if (answer === "ERROR_AI") {
+      return bot.sendMessage(chatId, "❌ خطا در هوش مصنوعی");
     }
+
+    if (answer.includes("بی‌مورد")) {
+      return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
+    }
+
+    return bot.sendMessage(chatId, answer);
   }
 
   // ---------- SEARCH ----------

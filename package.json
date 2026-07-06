@@ -1,7 +1,7 @@
 {
   "name": "tasisati-eshaghi-bot",
-  "version": "2.0.0",
-  "description": "Telegram Shop Bot with AI + PostgreSQL",
+  "version": "3.0.0",
+  "description": "Telegram Shop Bot with AI + PostgreSQL + Admin Panel",
   "type": "module",
   "main": "index.js",
   "scripts": {

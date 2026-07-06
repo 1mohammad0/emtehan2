@@ -19,10 +19,11 @@ export async function initDB() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        telegram_id BIGINT UNIQUE,
+        telegram_id BIGINT UNIQUE NOT NULL,
         username TEXT,
         first_name TEXT,
         last_name TEXT,
+        blocked BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT NOW(),
         last_seen TIMESTAMP DEFAULT NOW()
       );
@@ -31,8 +32,8 @@ export async function initDB() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS search_history (
         id SERIAL PRIMARY KEY,
-        telegram_id BIGINT,
-        search_text TEXT,
+        telegram_id BIGINT NOT NULL,
+        search_text TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       );
     `);
@@ -40,7 +41,7 @@ export async function initDB() {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS ai_history (
         id SERIAL PRIMARY KEY,
-        telegram_id BIGINT,
+        telegram_id BIGINT NOT NULL,
         product_name TEXT,
         question TEXT,
         answer TEXT,
@@ -54,7 +55,7 @@ export async function initDB() {
   }
 }
 
-// ================= USERS =================
+// ================= SAVE USER =================
 export async function saveUser(msg) {
   try {
     const { id, username, first_name, last_name } = msg.from;
@@ -73,7 +74,7 @@ export async function saveUser(msg) {
   }
 }
 
-// ================= SEARCH HISTORY =================
+// ================= SAVE SEARCH =================
 export async function saveSearch(telegramId, text) {
   try {
     await pool.query(
@@ -88,7 +89,7 @@ export async function saveSearch(telegramId, text) {
   }
 }
 
-// ================= AI HISTORY =================
+// ================= SAVE AI =================
 export async function saveAI(telegramId, product, question, answer) {
   try {
     await pool.query(
@@ -100,5 +101,42 @@ export async function saveAI(telegramId, product, question, answer) {
     );
   } catch (err) {
     console.error("saveAI error:", err.message);
+  }
+}
+
+// ================= BLOCK / UNBLOCK =================
+export async function blockUser(telegramId) {
+  try {
+    await pool.query(
+      `UPDATE users SET blocked = TRUE WHERE telegram_id = $1`,
+      [telegramId]
+    );
+  } catch (e) {
+    console.error(e.message);
+  }
+}
+
+export async function unblockUser(telegramId) {
+  try {
+    await pool.query(
+      `UPDATE users SET blocked = FALSE WHERE telegram_id = $1`,
+      [telegramId]
+    );
+  } catch (e) {
+    console.error(e.message);
+  }
+}
+
+// ================= CHECK BLOCK =================
+export async function isBlocked(telegramId) {
+  try {
+    const res = await pool.query(
+      `SELECT blocked FROM users WHERE telegram_id = $1`,
+      [telegramId]
+    );
+
+    return res.rows[0]?.blocked || false;
+  } catch (e) {
+    return false;
   }
 }

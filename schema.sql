@@ -1,6 +1,6 @@
 -- ==============================
 -- Telegram Shop Bot Database
--- PostgreSQL Schema
+-- PostgreSQL Schema (Final)
 -- ==============================
 
 -- ================= USERS =================
@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT,
   first_name TEXT,
   last_name TEXT,
+  blocked BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW(),
   last_seen TIMESTAMP DEFAULT NOW()
 );
@@ -32,8 +33,7 @@ CREATE TABLE IF NOT EXISTS ai_history (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
--- ================= INDEXES (برای سرعت بهتر) =================
-
+-- ================= INDEXES =================
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id
 ON users(telegram_id);
 
@@ -44,5 +44,5 @@ CREATE INDEX IF NOT EXISTS idx_ai_telegram_id
 ON ai_history(telegram_id);
 
 -- ================= DONE =================
--- این فایل را می‌توانی مستقیم در Render PostgreSQL اجرا کنی
--- یا در pgAdmin / DBeaver import کنی
+-- این فایل را در Render PostgreSQL اجرا کن
+-- یا در pgAdmin / DBeaver ایمپورت کن

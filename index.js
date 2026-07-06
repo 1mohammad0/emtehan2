@@ -39,52 +39,39 @@ function mainMenu(chatId) {
     }
   });
 }
-import { saveUser, saveSearch } from "./database.js";
 
-// ================= SAVE USER MIDDLEWARE =================
-bot.on("message", async (msg) => {
+// ================= PRODUCTS =================
+async function getProducts() {
   try {
-    // هر پیام → ذخیره کاربر در دیتابیس
-    await saveUser(msg);
+    const now = Date.now();
+
+    if (cachedProducts.length && now - lastFetch < 30000) {
+      return cachedProducts;
+    }
+
+    const url = `https://docs.google.com/spreadsheets/d/${process.env.GOOGLE_SHEET_ID}/gviz/tq?tqx=out:json`;
+    const res = await axios.get(url, { timeout: 8000 });
+
+    const text = res.data;
+    const json = JSON.parse(
+      text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1)
+    );
+
+    cachedProducts = json.table.rows.map(r => ({
+      name: r.c?.[0]?.v || "",
+      price: r.c?.[1]?.v || "",
+      specs: r.c?.[2]?.v || "",
+      status: r.c?.[3]?.v || "نامشخص"
+    }));
+
+    lastFetch = now;
+    return cachedProducts;
+
   } catch (e) {
-    console.error("saveUser error:", e.message);
+    console.error("Sheet error:", e.message);
+    return cachedProducts;
   }
-});
-
-// ================= MAIN MESSAGE HANDLER =================
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-
-  if (!text || text.startsWith("/")) return;
-
-  // ---------- MENU ----------
-  if (text === "🔍 جستجوی محصول") {
-    return bot.sendMessage(chatId, "✍️ نام یا دسته محصول را بنویس:");
-  }
-
-  if (text === "📞 ارتباط با ما") {
-    return bot.sendMessage(chatId, "📞 @m1348sh\n📱 09143531348");
-  }
-
-  if (text === "📢 کانال اصلی") {
-    return bot.sendMessage(chatId, "https://t.me/tasisatyeshagi");
-  }
-
-  if (text === "📍 آدرس فروشگاه") {
-    return bot.sendLocation(chatId, 38.2598767, 48.3091167);
-  }
-
-  // ================= SAVE SEARCH =================
-  try {
-    await saveSearch(msg.from.id, text);
-  } catch (e) {
-    console.error("saveSearch error:", e.message);
-  }
-
-  // ادامه منطق سرچ در پیام بعدی...
-});
-import { saveAI } from "./database.js";
+}
 
 // ================= SMART SEARCH =================
 function smartScore(text, product) {
@@ -109,7 +96,7 @@ function smartScore(text, product) {
   return score;
 }
 
-// ================= AI MODE (UPDATED WITH DB) =================
+// ================= AI =================
 async function askAI(product, question) {
   try {
     const res = await axios.post(
@@ -119,11 +106,7 @@ async function askAI(product, question) {
         messages: [
           {
             role: "system",
-            content: `
-تو یک فروشنده حرفه‌ای تاسیسات هستی.
-فقط درباره محصولات جواب بده.
-اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد
-`
+            content: `تو یک فروشنده حرفه‌ای تاسیسات هستی. فقط درباره محصولات جواب بده. اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد`
           },
           {
             role: "user",
@@ -154,35 +137,78 @@ ${question}
   }
 }
 
-// ================= SEARCH + AI HANDLER (FINAL LOGIC) =================
-async function handleAI(chatId, product, question, msg) {
-  const answer = await askAI(product, question);
+// ================= START =================
+bot.onText(/\/start/, msg => mainMenu(msg.chat.id));
 
-  if (!answer || answer === "ERROR") {
-    return bot.sendMessage(chatId, "❌ خطا در هوش مصنوعی");
-  }
+// ================= MESSAGE (ONLY ONE HANDLER) =================
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
 
-  // ذخیره در دیتابیس
+  if (!text || text.startsWith("/")) return;
+
   try {
-    await saveAI(
-      msg.from.id,
-      product?.name || "",
-      question,
-      answer
-    );
+    await saveUser(msg);
   } catch (e) {
-    console.error("saveAI error:", e.message);
+    console.error("saveUser error:", e.message);
   }
 
-  if (answer.includes("بی‌مورد")) {
-    return bot.sendMessage(chatId, "❌ پیام شما بی‌مورد است");
+  // ---------- MENU ----------
+  if (text === "🔍 جستجوی محصول") {
+    return bot.sendMessage(chatId, "✍️ نام یا دسته محصول را بنویس:");
   }
 
-  return bot.sendMessage(chatId, answer);
-}
-import { saveSearch } from "./database.js";
+  if (text === "📞 ارتباط با ما") {
+    return bot.sendMessage(chatId, "📞 @m1348sh\n📱 09143531348");
+  }
 
-// ================= PRODUCT SENDER =================
+  if (text === "📢 کانال اصلی") {
+    return bot.sendMessage(chatId, "https://t.me/tasisatyeshagi");
+  }
+
+  if (text === "📍 آدرس فروشگاه") {
+    return bot.sendLocation(chatId, 38.2598767, 48.3091167);
+  }
+
+  try {
+    await saveSearch(msg.from.id, text);
+  } catch (e) {
+    console.error("saveSearch error:", e.message);
+  }
+
+  // ---------- SEARCH ----------
+  const products = await getProducts();
+
+  const fuse = new Fuse(products, {
+    keys: ["name", "specs"],
+    threshold: 0.3
+  });
+
+  let results = fuse.search(text).map(r => r.item);
+
+  if (!results.length) {
+    return bot.sendMessage(chatId, "❌ چیزی پیدا نشد");
+  }
+
+  if (results.length === 1) {
+    return sendProduct(chatId, results[0]);
+  }
+
+  userCache.set(chatId, results);
+
+  return bot.sendMessage(chatId,
+`🔍 ${results.length} محصول پیدا شد:`,
+{
+  reply_markup: {
+    inline_keyboard: results.map(p => ([{
+      text: p.name,
+      callback_data: `open_${p.name}`
+    }]))
+  }
+});
+});
+
+// ================= PRODUCT =================
 function sendProduct(chatId, product) {
   return bot.sendMessage(chatId,
 `🛒 ${product.name}
@@ -192,27 +218,26 @@ function sendProduct(chatId, product) {
 
 📝 مشخصات:
 ${product.specs || "-"}`,
-  {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🔙 بازگشت به لیست", callback_data: "back_list" }],
-        [{ text: "🌐 جستجو در اینترنت", callback_data: `web_${product.name}` }],
-        [{ text: "🤖 پرسش از هوش مصنوعی", callback_data: `ai_${product.name}` }]
-      ]
-    }
-  });
+{
+  reply_markup: {
+    inline_keyboard: [
+      [{ text: "🔙 بازگشت", callback_data: "back_list" }],
+      [{ text: "🌐 اینترنت", callback_data: `web_${product.name}` }],
+      [{ text: "🤖 AI", callback_data: `ai_${product.name}` }]
+    ]
+  }
+});
 }
 
 // ================= CALLBACK =================
 bot.on("callback_query", async (q) => {
   const chatId = q.message.chat.id;
 
-  // ---------- BACK ----------
   if (q.data === "back_list") {
     const list = userCache.get(chatId);
     if (!list) return mainMenu(chatId);
 
-    return bot.sendMessage(chatId, "🔙 لیست محصولات:", {
+    return bot.sendMessage(chatId, "🔙 لیست:", {
       reply_markup: {
         inline_keyboard: list.map(p => ([{
           text: p.name,
@@ -222,7 +247,6 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // ---------- OPEN PRODUCT ----------
   if (q.data.startsWith("open_")) {
     const name = q.data.replace("open_", "");
     const products = await getProducts();
@@ -231,18 +255,13 @@ bot.on("callback_query", async (q) => {
     if (product) return sendProduct(chatId, product);
   }
 
-  // ---------- WEB SEARCH ----------
   if (q.data.startsWith("web_")) {
     const query = q.data.replace("web_", "");
     const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
-    return bot.sendMessage(chatId,
-`🌐 جستجو در اینترنت:
-
-${url}`);
+    return bot.sendMessage(chatId, `🌐\n${url}`);
   }
 
-  // ---------- AI MODE ----------
   if (q.data.startsWith("ai_")) {
     const productName = q.data.replace("ai_", "");
 
@@ -252,7 +271,7 @@ ${url}`);
     });
 
     return bot.sendMessage(chatId,
-`🤖 سوال خود را درباره این محصول بنویس:
+`🤖 سوالت رو درباره این محصول بپرس:
 
 🛒 ${productName}`);
   }

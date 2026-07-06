@@ -18,6 +18,13 @@ app.listen(process.env.PORT || 3000);
 // ================= INIT DB =================
 initDB();
 
+// ================= ADMIN IDS =================
+const ADMIN_IDS = (process.env.ADMIN_ID || "").split(",");
+
+function isAdmin(id) {
+  return ADMIN_IDS.includes(String(id));
+}
+
 // ================= CACHE =================
 let cachedProducts = [];
 let lastFetch = 0;
@@ -40,7 +47,7 @@ function mainMenu(chatId) {
   });
 }
 
-// ================= PRODUCTS =================
+// ================= GET PRODUCTS =================
 async function getProducts() {
   try {
     const now = Date.now();
@@ -81,14 +88,11 @@ function smartScore(text, product) {
 
   let score = 0;
 
-  if (name === t) score += 100;
   if (name.includes(t)) score += 60;
   if (t.includes(name)) score += 40;
 
-  const words = t.split(" ");
-  for (const w of words) {
+  for (const w of t.split(" ")) {
     if (w.length < 2) continue;
-
     if (name.includes(w)) score += 20;
     if (specs.includes(w)) score += 5;
   }
@@ -106,19 +110,11 @@ async function askAI(product, question) {
         messages: [
           {
             role: "system",
-            content: `تو یک فروشنده حرفه‌ای تاسیسات هستی. فقط درباره محصولات جواب بده. اگر سوال بی‌ربط بود فقط بنویس: بی‌مورد`
+            content: "تو فروشنده حرفه‌ای تاسیسات هستی فقط درباره محصولات جواب بده."
           },
           {
             role: "user",
-            content: `
-محصول:
-${product?.name || ""}
-${product?.price || ""}
-${product?.specs || ""}
-
-سوال:
-${question}
-`
+            content: `محصول: ${product?.name}\n${product?.price}\n${product?.specs}\n\nسوال: ${question}`
           }
         ]
       },
@@ -131,8 +127,7 @@ ${question}
     );
 
     return res.data.choices?.[0]?.message?.content || "ERROR";
-  } catch (err) {
-    console.error("AI ERROR:", err.response?.data || err.message);
+  } catch (e) {
     return "ERROR";
   }
 }
@@ -140,90 +135,82 @@ ${question}
 // ================= START =================
 bot.onText(/\/start/, msg => mainMenu(msg.chat.id));
 
-// ================= MESSAGE (ONLY ONE HANDLER) =================
+// ================= ADMIN PANEL =================
+bot.onText(/\/admin/, async (msg) => {
+  if (!isAdmin(msg.from.id)) return;
+
+  bot.sendMessage(msg.chat.id, "🛠 پنل ادمین", {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "👤 کاربران", callback_data: "adm_users" }],
+        [{ text: "🔎 سرچ‌ها", callback_data: "adm_search" }],
+        [{ text: "🤖 AI لاگ", callback_data: "adm_ai" }],
+        [{ text: "📊 آمار", callback_data: "adm_stats" }],
+        [{ text: "📢 پیام همگانی", callback_data: "adm_broadcast" }]
+      ]
+    }
+  });
+});
+
+// ================= MESSAGE =================
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
   if (!text || text.startsWith("/")) return;
 
-  try {
-    await saveUser(msg);
-  } catch (e) {
-    console.error("saveUser error:", e.message);
-  }
+  await saveUser(msg);
 
-  // ---------- MENU ----------
-  if (text === "🔍 جستجوی محصول") {
-    return bot.sendMessage(chatId, "✍️ نام یا دسته محصول را بنویس:");
-  }
+  if (text === "🔍 جستجوی محصول")
+    return bot.sendMessage(chatId, "نام محصول را بنویس:");
 
-  if (text === "📞 ارتباط با ما") {
-    return bot.sendMessage(chatId, "📞 @m1348sh\n📱 09143531348");
-  }
+  if (text === "📞 ارتباط با ما")
+    return bot.sendMessage(chatId, "@m1348sh");
 
-  if (text === "📢 کانال اصلی") {
+  if (text === "📢 کانال اصلی")
     return bot.sendMessage(chatId, "https://t.me/tasisatyeshagi");
-  }
 
-  if (text === "📍 آدرس فروشگاه") {
+  if (text === "📍 آدرس فروشگاه")
     return bot.sendLocation(chatId, 38.2598767, 48.3091167);
-  }
 
-  try {
-    await saveSearch(msg.from.id, text);
-  } catch (e) {
-    console.error("saveSearch error:", e.message);
-  }
+  await saveSearch(msg.from.id, text);
 
-  // ---------- SEARCH ----------
   const products = await getProducts();
 
-  const fuse = new Fuse(products, {
-    keys: ["name", "specs"],
-    threshold: 0.3
-  });
+  const fuse = new Fuse(products, { keys: ["name"], threshold: 0.3 });
 
   let results = fuse.search(text).map(r => r.item);
 
-  if (!results.length) {
+  if (!results.length)
     return bot.sendMessage(chatId, "❌ چیزی پیدا نشد");
-  }
-
-  if (results.length === 1) {
-    return sendProduct(chatId, results[0]);
-  }
 
   userCache.set(chatId, results);
 
-  return bot.sendMessage(chatId,
-`🔍 ${results.length} محصول پیدا شد:`,
-{
-  reply_markup: {
-    inline_keyboard: results.map(p => ([{
-      text: p.name,
-      callback_data: `open_${p.name}`
-    }]))
-  }
-});
+  return bot.sendMessage(chatId, "🔍 نتایج:", {
+    reply_markup: {
+      inline_keyboard: results.map(p => ([{
+        text: p.name,
+        callback_data: `open_${p.name}`
+      }]))
+    }
+  });
 });
 
 // ================= PRODUCT =================
-function sendProduct(chatId, product) {
-  return bot.sendMessage(chatId,
-`🛒 ${product.name}
+function sendProduct(chatId, p) {
+  bot.sendMessage(chatId,
+`🛒 ${p.name}
 
-💰 قیمت: ${product.price}
-📦 وضعیت: ${product.status}
+💰 ${p.price}
+📦 ${p.status}
 
-📝 مشخصات:
-${product.specs || "-"}`,
+📝 ${p.specs}`,
 {
   reply_markup: {
     inline_keyboard: [
-      [{ text: "🔙 بازگشت", callback_data: "back_list" }],
-      [{ text: "🌐 اینترنت", callback_data: `web_${product.name}` }],
-      [{ text: "🤖 AI", callback_data: `ai_${product.name}` }]
+      [{ text: "🔙 لیست", callback_data: "back" }],
+      [{ text: "🌐 اینترنت", callback_data: `web_${p.name}` }],
+      [{ text: "🤖 AI", callback_data: `ai_${p.name}` }]
     ]
   }
 });
@@ -233,46 +220,66 @@ ${product.specs || "-"}`,
 bot.on("callback_query", async (q) => {
   const chatId = q.message.chat.id;
 
-  if (q.data === "back_list") {
-    const list = userCache.get(chatId);
-    if (!list) return mainMenu(chatId);
+  // ========== ADMIN ==========
+  if (isAdmin(q.from.id)) {
 
-    return bot.sendMessage(chatId, "🔙 لیست:", {
-      reply_markup: {
-        inline_keyboard: list.map(p => ([{
-          text: p.name,
-          callback_data: `open_${p.name}`
-        }]))
-      }
-    });
+    if (q.data === "adm_users") {
+      const r = await pool.query("SELECT * FROM users ORDER BY id DESC LIMIT 100");
+      return bot.sendMessage(chatId,
+        r.rows.map(u => `👤 ${u.first_name} (${u.telegram_id})`).join("\n")
+      );
+    }
+
+    if (q.data === "adm_search") {
+      const r = await pool.query("SELECT * FROM search_history ORDER BY id DESC LIMIT 50");
+      return bot.sendMessage(chatId,
+        r.rows.map(s => `🔎 ${s.search_text}`).join("\n")
+      );
+    }
+
+    if (q.data === "adm_ai") {
+      const r = await pool.query("SELECT * FROM ai_history ORDER BY id DESC LIMIT 50");
+      return bot.sendMessage(chatId,
+        r.rows.map(a => `🤖 ${a.question} -> ${a.answer}`).join("\n")
+      );
+    }
+
+    if (q.data === "adm_stats") {
+      const u = await pool.query("SELECT COUNT(*) FROM users");
+      const s = await pool.query("SELECT COUNT(*) FROM search_history");
+      const a = await pool.query("SELECT COUNT(*) FROM ai_history");
+
+      return bot.sendMessage(chatId,
+`📊 آمار
+
+👤 کاربران: ${u.rows[0].count}
+🔎 سرچ: ${s.rows[0].count}
+🤖 AI: ${a.rows[0].count}`);
+    }
+
+    if (q.data === "adm_broadcast") {
+      userState.set(chatId, { mode: "broadcast" });
+      return bot.sendMessage(chatId, "پیام همگانی را بنویس:");
+    }
   }
 
+  // ========== USER ==========
   if (q.data.startsWith("open_")) {
     const name = q.data.replace("open_", "");
     const products = await getProducts();
-
-    const product = products.find(p => p.name === name);
-    if (product) return sendProduct(chatId, product);
+    const p = products.find(x => x.name === name);
+    if (p) sendProduct(chatId, p);
   }
 
   if (q.data.startsWith("web_")) {
-    const query = q.data.replace("web_", "");
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
-
-    return bot.sendMessage(chatId, `🌐\n${url}`);
+    const q2 = q.data.replace("web_", "");
+    return bot.sendMessage(chatId,
+      `https://www.google.com/search?q=${encodeURIComponent(q2)}`
+    );
   }
 
   if (q.data.startsWith("ai_")) {
-    const productName = q.data.replace("ai_", "");
-
-    userState.set(chatId, {
-      mode: "ai",
-      product: productName
-    });
-
-    return bot.sendMessage(chatId,
-`🤖 سوالت رو درباره این محصول بپرس:
-
-🛒 ${productName}`);
+    userState.set(chatId, { mode: "ai", product: q.data.replace("ai_", "") });
+    return bot.sendMessage(chatId, "سوالت رو بنویس:");
   }
 });
